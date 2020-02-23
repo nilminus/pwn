@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+import threading
+import os
 import logging
 import selectors
 import select
@@ -14,7 +15,7 @@ sel = selectors.DefaultSelector()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("host", help="host to connect to", action="store", nargs = '?', default='localhost')
+    parser.add_argument("host", help="host to connect to", action="store", nargs = '?', default='0.0.0.0')
     parser.add_argument("port", type=int, help="port to connect to", action="store")
     parser.add_argument("--listen", "-l", help="bind and listen for incoming connections", action="store_true")
     parser.add_argument("--shell", "-c", help="initialise a command shell", action="store_true")
@@ -23,23 +24,6 @@ def parse_arguments():
     parser.add_argument("--verbose", "-v", help="verbose", action="store_true")
     args = parser.parse_args()
     return args
-
-def accept(sock, mask):
-    conn, addr = sock.accept()
-    print('accepted', conn, 'from', addr)
-    conn.setblocking(False)
-    sel.register(conn, selectors.EVENT_READ, read)
-
-def read(conn, mask):
-    data = conn.recv(1024)
-    if data:
-        print(data.decode())
-        buffer = input().encode() + b'\n'
-        conn.send(buffer)
-    else:
-        print('closing', conn)
-        sel.unregister(conn)
-        conn.close()
 
 def connect_host(host, port):
     s = socket(AF_INET, SOCK_STREAM)
@@ -134,12 +118,53 @@ def main():
                 elif args.execute:
                     execute_file(conn, args.execute)
                 elif args.shell:
-                    spawn_shell(conn)
+                    #  spawn_shell(conn)
+                    bettershell(conn)
                 else:
                     just_listen(conn)
 
     else:           # connect to host, port
         connect_host(args.host, args.port)
+
+def bettershell(conn):
+    shell = BetterShell()
+    shell.run(conn)
+
+
+class BetterShell(object):
+    def __init__(self):
+        pass
+
+    def run(self, conn):
+        env = os.environ.copy()
+        p = subprocess.Popen('/bin/bash', stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True, env=env)
+        sys.stdout.write("Started Local Terminal...\r\n\r\n")
+
+        def writeall(p):
+            while True:
+                data = p.stdout.read(1)
+                if not data:
+                    break
+                conn.send(data)
+
+        writer = threading.Thread(target=writeall, args=(p,))
+        writer.start()
+
+        try:
+            while True:
+                #  d = sys.stdin.read(1)
+                d = conn.recv(1)
+                if not d:
+                    break
+                self._write(p, d)
+
+        except EOFError:
+            pass
+
+    def _write(self, process, message):
+        process.stdin.write(message)
+        process.stdin.flush()
+
 
 
 if __name__ == '__main__':
